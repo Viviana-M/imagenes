@@ -1,0 +1,491 @@
+From 86ae0599932bdb79fe4db9dbf8653d4bca70b20b Mon Sep 17 00:00:00 2001
+From: SECAR fixes <noreply@anthropic.com>
+Date: Wed, 15 Jul 2026 01:06:34 +0000
+Subject: [PATCH] =?UTF-8?q?Correcciones:=20PSR-4,=20permisos,=20redirect?=
+ =?UTF-8?q?=20login,=20=C3=ADndices=20y=20limpieza?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bugs / correctness:
+- Renombrar app/Models/cargafinanciera.php -> CargaFinanciera.php (PSR-4)
+- Renombrar app/jobs/financiero -> app/Jobs/Financiero (PSR-4)
+- ForecastController::guardar: quitar clave 'estado' duplicada y '?? 0' muerto
+- Login: rol 'contable' redirigía a /contable/dashboard (404) -> /dashboard
+
+Seguridad / permisos:
+- UnBolsaController y TerceroManoObraController: guardia soloAdmin() en todos los métodos
+- Guardias puedeEditarModulo en mutadores sin protección:
+  Homologacion (guardar/actualizar/eliminar/importar), MaestroComercial
+  (importar/guardar/actualizar/eliminar), PlanoContable::habilitar,
+  PlanoReclasificacion::marcar, Forecast (guardar/enviar)
+
+Rendimiento:
+- Migración de índices para registro_financieros y forecast_operativo
+
+Limpieza / duplicación:
+- Consolidar mapa de prefijos por departamento en User::PREFIJOS_DEPARTAMENTO
+- Eliminar vista huérfana resources/views/financiero/carga.blade.php
+---
+ .../Admin/TerceroManoObraController.php       |  10 ++
+ .../Controllers/Admin/UnBolsaController.php   |  10 ++
+ .../Auth/AuthenticatedSessionController.php   |   2 +-
+ .../Contable/HomologacionController.php       |   4 +
+ .../Contable/PlanoContableController.php      |   1 +
+ .../PlanoReclasificacionController.php        |   1 +
+ .../Operativo/ForecastController.php          |   7 +-
+ .../Operativo/MaestroComercialController.php  |   4 +
+ .../Financiero}/ProcesarArchivoFinanciero.php |   0
+ ...argafinanciera.php => CargaFinanciera.php} |   0
+ app/Models/User.php                           |  15 +--
+ ..._15_000000_agregar_indices_rendimiento.php |  42 ++++++++
+ resources/views/financiero/carga.blade.php    | 100 ------------------
+ 13 files changed, 87 insertions(+), 109 deletions(-)
+ rename app/{jobs/financiero => Jobs/Financiero}/ProcesarArchivoFinanciero.php (100%)
+ rename app/Models/{cargafinanciera.php => CargaFinanciera.php} (100%)
+ create mode 100644 database/migrations/2026_07_15_000000_agregar_indices_rendimiento.php
+ delete mode 100644 resources/views/financiero/carga.blade.php
+
+diff --git a/app/Http/Controllers/Admin/TerceroManoObraController.php b/app/Http/Controllers/Admin/TerceroManoObraController.php
+index 6d15005..74d6c6d 100644
+--- a/app/Http/Controllers/Admin/TerceroManoObraController.php
++++ b/app/Http/Controllers/Admin/TerceroManoObraController.php
+@@ -5,17 +5,25 @@
+ use App\Http\Controllers\Controller;
+ use App\Models\TerceroManoObra;
+ use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Auth;
+ 
+ class TerceroManoObraController extends Controller
+ {
++    private function soloAdmin(): void
++    {
++        abort_unless(Auth::user()->esAdmin(), 403, 'No tienes permiso para administrar terceros de mano de obra.');
++    }
++
+     public function index()
+     {
++        $this->soloAdmin();
+         $terceros = TerceroManoObra::orderBy('nombre')->get();
+         return view('admin.terceros-mano-obra.index', ['terceros' => $terceros]);
+     }
+ 
+     public function store(Request $request)
+     {
++        $this->soloAdmin();
+         $datos = $request->validate([
+             'cedula'       => 'required|string|max:20|unique:terceros_mano_obra,cedula',
+             'nombre'       => 'required|string|max:255',
+@@ -30,6 +38,7 @@ public function store(Request $request)
+ 
+     public function update(Request $request, TerceroManoObra $terceroManoObra)
+     {
++        $this->soloAdmin();
+         $datos = $request->validate([
+             'nombre'       => 'required|string|max:255',
+             'departamento' => 'required|in:mantenimiento,instalaciones',
+@@ -40,6 +49,7 @@ public function update(Request $request, TerceroManoObra $terceroManoObra)
+ 
+     public function toggle(TerceroManoObra $terceroManoObra)
+     {
++        $this->soloAdmin();
+         $terceroManoObra->activo = !$terceroManoObra->activo;
+         $terceroManoObra->save();
+         return back()->with('success', $terceroManoObra->activo ? 'Persona activada.' : 'Persona desactivada.');
+diff --git a/app/Http/Controllers/Admin/UnBolsaController.php b/app/Http/Controllers/Admin/UnBolsaController.php
+index 1bb075d..7f38c5f 100644
+--- a/app/Http/Controllers/Admin/UnBolsaController.php
++++ b/app/Http/Controllers/Admin/UnBolsaController.php
+@@ -5,17 +5,25 @@
+ use App\Http\Controllers\Controller;
+ use App\Models\UnBolsa;
+ use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Auth;
+ 
+ class UnBolsaController extends Controller
+ {
++    private function soloAdmin(): void
++    {
++        abort_unless(Auth::user()->esAdmin(), 403, 'No tienes permiso para administrar unidades de negocio.');
++    }
++
+     public function index()
+     {
++        $this->soloAdmin();
+         $bolsas = UnBolsa::orderBy('departamento')->orderBy('codigo')->get();
+         return view('admin.un-bolsas.index', ['bolsas' => $bolsas]);
+     }
+ 
+     public function store(Request $request)
+     {
++        $this->soloAdmin();
+         $datos = $request->validate([
+             'codigo'       => 'required|string|max:30|unique:un_bolsas,codigo',
+             'nombre'       => 'nullable|string|max:255',
+@@ -32,6 +40,7 @@ public function store(Request $request)
+ 
+     public function update(Request $request, UnBolsa $unBolsa)
+     {
++        $this->soloAdmin();
+         $datos = $request->validate([
+             'nombre'       => 'nullable|string|max:255',
+             'departamento' => 'required|in:mantenimiento,instalaciones',
+@@ -42,6 +51,7 @@ public function update(Request $request, UnBolsa $unBolsa)
+ 
+     public function toggle(UnBolsa $unBolsa)
+     {
++        $this->soloAdmin();
+         $unBolsa->activo = !$unBolsa->activo;
+         $unBolsa->save();
+         return back()->with('success', $unBolsa->activo ? 'Bolsa activada.' : 'Bolsa desactivada.');
+diff --git a/app/Http/Controllers/Auth/AuthenticatedSessionController.php b/app/Http/Controllers/Auth/AuthenticatedSessionController.php
+index bda86c3..3f3a557 100644
+--- a/app/Http/Controllers/Auth/AuthenticatedSessionController.php
++++ b/app/Http/Controllers/Auth/AuthenticatedSessionController.php
+@@ -27,7 +27,7 @@ public function store(LoginRequest $request): RedirectResponse
+             'financiero' => redirect('/financiero/dashboard'),
+             'operativo'  => redirect('/operativo/dashboard'),
+             'comercial'  => redirect('/comercial/cotizaciones'),
+-            'contable'   => redirect('/contable/dashboard'),
++            'contable'   => redirect('/dashboard'),
+             default      => redirect('/dashboard'),
+         };
+     }
+diff --git a/app/Http/Controllers/Contable/HomologacionController.php b/app/Http/Controllers/Contable/HomologacionController.php
+index 75297d0..5484408 100644
+--- a/app/Http/Controllers/Contable/HomologacionController.php
++++ b/app/Http/Controllers/Contable/HomologacionController.php
+@@ -130,6 +130,7 @@ private function validarPeriodo(int $vigenteDesde, ?Homologacion $actual = null)
+ 
+     public function guardar(Request $request)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('contabilidad'), 403, 'No tienes permiso para editar homologaciones.');
+         $data = $request->validate(
+             [
+                 'cuenta_14'  => ['required', 'string', 'max:255', 'regex:/^14\d+$/'],
+@@ -177,6 +178,7 @@ public function guardar(Request $request)
+      */
+     public function actualizar(Request $request, Homologacion $homologacion)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('contabilidad'), 403, 'No tienes permiso para editar homologaciones.');
+         $data = $request->validate(
+             [
+                 'cuenta_61'                => ['required', 'string', 'max:255', 'regex:/^6\d+$/'],
+@@ -275,6 +277,7 @@ public function actualizar(Request $request, Homologacion $homologacion)
+      */
+     public function eliminar(Homologacion $homologacion)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('contabilidad'), 403, 'No tienes permiso para eliminar homologaciones.');
+         $cuenta = $homologacion->cuenta_14;
+ 
+         $n = Homologacion::sinFiltro()->where('cuenta_14', $cuenta)->count();
+@@ -288,6 +291,7 @@ public function eliminar(Homologacion $homologacion)
+ 
+     public function importar(Request $request)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('contabilidad'), 403, 'No tienes permiso para importar homologaciones.');
+         $request->validate([
+             'archivo'      => 'required|file|mimes:xlsx,xls|max:51200',
+             'vigente_mes'  => 'required|integer|between:1,12',
+diff --git a/app/Http/Controllers/Contable/PlanoContableController.php b/app/Http/Controllers/Contable/PlanoContableController.php
+index 31cc9c6..e971f00 100644
+--- a/app/Http/Controllers/Contable/PlanoContableController.php
++++ b/app/Http/Controllers/Contable/PlanoContableController.php
+@@ -302,6 +302,7 @@ private function ultimoDiaDelMes(int $anio, int $mes): string
+ 
+     public function habilitar(Distribucion $distribucion)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('contabilidad'), 403, 'No tienes permiso para habilitar la edición del plano contable.');
+         $distribucion->edicion_habilitada = !$distribucion->edicion_habilitada;
+         $distribucion->save();
+ 
+diff --git a/app/Http/Controllers/Contable/PlanoReclasificacionController.php b/app/Http/Controllers/Contable/PlanoReclasificacionController.php
+index 3619a7f..1e789e8 100644
+--- a/app/Http/Controllers/Contable/PlanoReclasificacionController.php
++++ b/app/Http/Controllers/Contable/PlanoReclasificacionController.php
+@@ -171,6 +171,7 @@ public function descargar(int $id)
+      */
+     public function marcar(Request $request, int $id)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('contabilidad'), 403, 'No tienes permiso para marcar reclasificaciones.');
+         $homologacion = $this->buscar($id);
+         if (!$homologacion) {
+             return redirect()->route('contable.reclasificaciones.index')
+diff --git a/app/Http/Controllers/Operativo/ForecastController.php b/app/Http/Controllers/Operativo/ForecastController.php
+index b589618..d916611 100644
+--- a/app/Http/Controllers/Operativo/ForecastController.php
++++ b/app/Http/Controllers/Operativo/ForecastController.php
+@@ -129,6 +129,8 @@ public function index(Request $request)
+ 
+     public function guardar(Request $request)
+     {
++        abort_unless($request->user()->puedeEditarModulo('operacion'), 403, 'No tienes permiso para editar el forecast.');
++
+         $mes  = $request->mes;
+         $anio = $request->anio;
+         $data = $request->movimientos ?? [];
+@@ -149,12 +151,11 @@ public function guardar(Request $request)
+                     ],
+                     [
+                         'nombre_proyecto'   => $nombreProyecto,
+-                        'monto_a_mover'     => floatval($monto) ?? 0,
++                        'monto_a_mover'     => floatval($monto),
+                         'margen_minimo_pct' => floatval($margenMinimo),
+                         'estado_obra'       => $estadoObra,
+                         'avance_pct'        => floatval($avancePct),
+                         'estado'            => 'borrador',
+-                        'estado'            => 'borrador',
+                         'user_id'           => $request->user()?->id,
+                     ]
+                 );
+@@ -166,6 +167,8 @@ public function guardar(Request $request)
+ 
+     public function enviar(Request $request)
+     {
++        abort_unless($request->user()->puedeEditarModulo('operacion'), 403, 'No tienes permiso para enviar el forecast.');
++
+         $mes  = $request->mes;
+         $anio = $request->anio;
+ 
+diff --git a/app/Http/Controllers/Operativo/MaestroComercialController.php b/app/Http/Controllers/Operativo/MaestroComercialController.php
+index cd5634c..2d09784 100644
+--- a/app/Http/Controllers/Operativo/MaestroComercialController.php
++++ b/app/Http/Controllers/Operativo/MaestroComercialController.php
+@@ -20,6 +20,7 @@ public function index()
+ 
+     public function importar(Request $request)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('operacion'), 403, 'No tienes permiso para importar el maestro de proyectos.');
+         $request->validate([
+             'archivo' => 'required|file|mimes:xlsx,xls|max:51200',
+         ]);
+@@ -124,6 +125,7 @@ public function importar(Request $request)
+ 
+     public function guardar(Request $request)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('operacion'), 403, 'No tienes permiso para editar el maestro de proyectos.');
+         $data = $request->validate([
+             'codigo_proyecto'       => 'required|string|max:255',
+             'cliente'               => 'nullable|string',
+@@ -150,6 +152,7 @@ public function guardar(Request $request)
+ 
+     public function actualizar(Request $request, FichaProyecto $ficha)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('operacion'), 403, 'No tienes permiso para editar el maestro de proyectos.');
+         $data = $request->validate([
+             'codigo_proyecto'       => 'required|string|max:255',
+             'cliente'               => 'nullable|string',
+@@ -170,6 +173,7 @@ public function actualizar(Request $request, FichaProyecto $ficha)
+ 
+     public function eliminar(FichaProyecto $ficha)
+     {
++        abort_unless(auth()->user()->puedeEditarModulo('operacion'), 403, 'No tienes permiso para eliminar proyectos del maestro.');
+         $ficha->delete();
+         return back()->with('success', 'Proyecto eliminado.');
+     }
+diff --git a/app/jobs/financiero/ProcesarArchivoFinanciero.php b/app/Jobs/Financiero/ProcesarArchivoFinanciero.php
+similarity index 100%
+rename from app/jobs/financiero/ProcesarArchivoFinanciero.php
+rename to app/Jobs/Financiero/ProcesarArchivoFinanciero.php
+diff --git a/app/Models/cargafinanciera.php b/app/Models/CargaFinanciera.php
+similarity index 100%
+rename from app/Models/cargafinanciera.php
+rename to app/Models/CargaFinanciera.php
+diff --git a/app/Models/User.php b/app/Models/User.php
+index 855992c..f1f1936 100644
+--- a/app/Models/User.php
++++ b/app/Models/User.php
+@@ -17,6 +17,12 @@ class User extends Authenticatable
+     /** Departamentos: no son modulos con nivel, son filtros de obra (pertenece/no). */
+     public const DEPARTAMENTOS = ['dep_mantenimiento', 'dep_instalaciones'];
+ 
++    /** Prefijos de código de obra por departamento. Fuente única de verdad. */
++    public const PREFIJOS_DEPARTAMENTO = [
++        'mantenimiento' => ['C', 'R', 'MO', 'GM'],
++        'instalaciones' => ['GI', 'O'],
++    ];
++
+     protected $fillable = [
+         'name',
+         'email',
+@@ -115,8 +121,8 @@ public function nivelModulo(string $clave): ?string
+     public function departamentosPermitidos(): array
+     {
+         $mapa = [
+-            'dep_mantenimiento' => ['C', 'R', 'MO', 'GM'],
+-            'dep_instalaciones' => ['GI', 'O'],
++            'dep_mantenimiento' => self::PREFIJOS_DEPARTAMENTO['mantenimiento'],
++            'dep_instalaciones' => self::PREFIJOS_DEPARTAMENTO['instalaciones'],
+         ];
+ 
+         $prefijos = [];
+@@ -142,10 +148,7 @@ public function departamentoUnico(): ?string
+ 
+     public static function prefijosDeDepartamento(string $dep): array
+     {
+-        return [
+-            'mantenimiento' => ['C', 'R', 'MO', 'GM'],
+-            'instalaciones' => ['GI', 'O'],
+-        ][$dep] ?? [];
++        return self::PREFIJOS_DEPARTAMENTO[$dep] ?? [];
+     }
+ 
+     public function tieneFiltroDepartamento(): bool
+diff --git a/database/migrations/2026_07_15_000000_agregar_indices_rendimiento.php b/database/migrations/2026_07_15_000000_agregar_indices_rendimiento.php
+new file mode 100644
+index 0000000..6f7c34e
+--- /dev/null
++++ b/database/migrations/2026_07_15_000000_agregar_indices_rendimiento.php
+@@ -0,0 +1,42 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++/**
++ * Índices de rendimiento para las tablas más consultadas.
++ *
++ * `registro_financieros` es la tabla central del sistema: casi todas las
++ * pantallas agregan sobre ella con filtros por (cuenta_mayor, anio, mes) y
++ * agrupaciones por codigo_proyecto. Sin índices, cada consulta es un escaneo
++ * completo de tabla, que se degrada a medida que crece (~20.000+ filas/mes).
++ */
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::table('registro_financieros', function (Blueprint $table) {
++            $table->index(['cuenta_mayor', 'anio', 'mes'], 'idx_regfin_cuentamayor_periodo');
++            $table->index(['codigo_proyecto', 'cuenta_mayor'], 'idx_regfin_proyecto_cuentamayor');
++            $table->index('cuenta_contable', 'idx_regfin_cuentacontable');
++        });
++
++        Schema::table('forecast_operativo', function (Blueprint $table) {
++            $table->index(['codigo_proyecto', 'anio', 'mes'], 'idx_forecast_proyecto_periodo');
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('registro_financieros', function (Blueprint $table) {
++            $table->dropIndex('idx_regfin_cuentamayor_periodo');
++            $table->dropIndex('idx_regfin_proyecto_cuentamayor');
++            $table->dropIndex('idx_regfin_cuentacontable');
++        });
++
++        Schema::table('forecast_operativo', function (Blueprint $table) {
++            $table->dropIndex('idx_forecast_proyecto_periodo');
++        });
++    }
++};
+diff --git a/resources/views/financiero/carga.blade.php b/resources/views/financiero/carga.blade.php
+deleted file mode 100644
+index 98cb497..0000000
+--- a/resources/views/financiero/carga.blade.php
++++ /dev/null
+@@ -1,100 +0,0 @@
+-@extends('layouts.app')
+-
+-@section('title', 'Cargar información financiera')
+-
+-@section('content')
+-    <h1 class="page-title">Carga de información financiera</h1>
+-
+-    @if(session('success'))
+-        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;font-size:13px;color:#15803D;margin-bottom:1rem;">
+-            {{ session('success') }}
+-        </div>
+-    @endif
+-
+-    @if($errors->any())
+-        <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;font-size:13px;color:#DC2626;margin-bottom:1rem;">
+-            {{ $errors->first() }}
+-        </div>
+-    @endif
+-
+-    <div class="card">
+-        <h3>Período a cargar</h3>
+-        <form method="POST" action="{{ route('contable.carga.store') }}" enctype="multipart/form-data">
+-            @csrf
+-
+-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1rem">
+-                <div>
+-                    <label style="font-size:12px;color:#6B7280;display:block;margin-bottom:4px">Mes</label>
+-                    <select name="mes" style="width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:8px;font-size:13px">
+-                        <option value="1">Enero</option>
+-                        <option value="2">Febrero</option>
+-                        <option value="3">Marzo</option>
+-                        <option value="4">Abril</option>
+-                        <option value="5">Mayo</option>
+-                        <option value="6">Junio</option>
+-                        <option value="7">Julio</option>
+-                        <option value="8">Agosto</option>
+-                        <option value="9">Septiembre</option>
+-                        <option value="10">Octubre</option>
+-                        <option value="11">Noviembre</option>
+-                        <option value="12">Diciembre</option>
+-                    </select>
+-                </div>
+-                <div>
+-                    <label style="font-size:12px;color:#6B7280;display:block;margin-bottom:4px">Año</label>
+-                    <select name="anio" style="width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:8px;font-size:13px">
+-    <option value="2022">2022</option>
+-    <option value="2023">2023</option>
+-    <option value="2024">2024</option>
+-    <option value="2025" selected>2025</option>
+-    <option value="2026">2026</option>
+-</select>
+-                </div>
+-            </div>
+-
+-            <div style="margin-bottom:1rem">
+-                <label style="font-size:12px;color:#6B7280;display:block;margin-bottom:4px">Archivo Excel o CSV del BIABLE</label>
+-                <input type="file" name="archivo" accept=".xlsx,.xls,.csv"
+-                    style="width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:8px;font-size:13px;background:white">
+-                <small style="font-size:11px;color:#9CA3AF">Formatos aceptados: .xlsx, .xls, .csv — máximo 10MB</small>
+-            </div>
+-
+-            <button type="submit"
+-                style="padding:9px 24px;background:#1B3F6E;color:white;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer">
+-                Cargar archivo
+-            </button>
+-        </form>
+-    </div>
+-    @if($ultimaCarga->count() > 0)
+-    <div class="card" style="margin-top:1rem">
+-        <h3>Historial de cargas</h3>
+-        <table style="width:100%;border-collapse:collapse;font-size:13px">
+-            <thead>
+-                <tr>
+-                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #E5E7EB;color:#6B7280;font-size:11px">Período</th>
+-                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #E5E7EB;color:#6B7280;font-size:11px">Registros</th>
+-                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #E5E7EB;color:#6B7280;font-size:11px">Estado</th>
+-                </tr>
+-            </thead>
+-            <tbody>
+-                @foreach($ultimaCarga as $carga)
+-                <tr>
+-                    <td style="padding:8px;border-bottom:1px solid #F3F4F6">
+-                        {{ \Carbon\Carbon::create()->month($carga->mes)->translatedFormat('F') }}
+-                        {{ $carga->anio }}
+-                    </td>
+-                    <td style="padding:8px;border-bottom:1px solid #F3F4F6">
+-                        {{ number_format($carga->registros) }}
+-                    </td>
+-                    <td style="padding:8px;border-bottom:1px solid #F3F4F6">
+-                        <span style="background:#F0FDF4;color:#15803D;font-size:11px;padding:2px 8px;border-radius:10px">
+-                            Procesado
+-                        </span>
+-                    </td>
+-                </tr>
+-                @endforeach
+-            </tbody>
+-        </table>
+-    </div>
+-    @endif
+-@endsection
+\ No newline at end of file
+-- 
+2.43.0
+
